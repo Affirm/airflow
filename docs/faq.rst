@@ -141,7 +141,7 @@ variable in the global namespace. This is easily done in python using the
 ``globals()`` function for the standard library, which behaves like a
 simple dictionary.
 
-.. code:: python
+.. code-block:: python
 
     def create_dag(dag_id):
         """
@@ -220,3 +220,11 @@ How do I stop the sync perms happening multiple times per webserver?
 --------------------------------------------------------------------
 
 Set the value of ``update_fab_perms`` configuration in ``airflow.cfg`` to ``False``.
+
+Why did the pause dag toggle turn red?
+--------------------------------------
+
+If pausing or unpausing a dag fails for any reason, the dag toggle will
+revert to its previous state and turn red. If you observe this behavior,
+try pausing the dag again, or check the console or server logs if the
+issue recurs.

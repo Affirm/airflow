@@ -149,13 +149,11 @@ tramp
 # Spark
 rat-results.txt
 
-# Git stuff
-.gitattributes
 # Kubernetes generated templated files
 *.generated
 *.tar.gz
-scripts/ci/in_container/kubernetes/kube/.generated/airflow.yaml
-scripts/ci/in_container/kubernetes/docker/requirements.txt
+scripts/ci/kubernetes/kube/.generated/airflow.yaml
+scripts/ci/kubernetes/docker/requirements.txt
 
 # Node & Webpack Stuff
 *.entry.js
@@ -176,7 +174,7 @@ airflow-*.pid
 .dmypy.json
 dmypy.json
 
-# Needed for CI Dockerfile build system
+# Needed for CI Dockerfile.ci build system
 .build
 /tmp
 /files
@@ -187,3 +185,8 @@ dmypy.json
 /.kube
 /.inputrc
 log.txt*
+
+Chart.lock
+
+# Chart dependencies
+**/charts/*.tgz
