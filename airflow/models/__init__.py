@@ -31,7 +31,7 @@ from airflow.models.renderedtifields import RenderedTaskInstanceFields  # noqa: 
 from airflow.models.skipmixin import SkipMixin  # noqa: F401
 from airflow.models.slamiss import SlaMiss  # noqa: F401
 from airflow.models.taskfail import TaskFail  # noqa: F401
-from airflow.models.taskinstance import TaskInstance, clear_task_instances  # noqa: F401
+from airflow.models.taskinstance import TaskInstance, cancel_task_instances, clear_task_instances  # noqa: F401
 from airflow.models.taskreschedule import TaskReschedule  # noqa: F401
 from airflow.models.variable import Variable  # noqa: F401
 from airflow.models.xcom import XCOM_RETURN_KEY, XCom  # noqa: F401

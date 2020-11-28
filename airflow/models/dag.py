@@ -53,12 +53,13 @@ from airflow.models.dagbag import DagBag
 from airflow.models.dagcode import DagCode
 from airflow.models.dagpickle import DagPickle
 from airflow.models.dagrun import DagRun
-from airflow.models.taskinstance import TaskInstance, clear_task_instances
+from airflow.models.taskinstance import TaskInstance, clear_task_instances, cancel_task_instances
 from airflow.settings import STORE_SERIALIZED_DAGS, MIN_SERIALIZED_DAG_UPDATE_INTERVAL
 from airflow.utils import timezone
 from airflow.utils.dag_processing import correct_maybe_zipped
 from airflow.utils.dates import cron_presets, date_range as utils_date_range
 from airflow.utils.db import provide_session
+from airflow.utils.email import send_email
 from airflow.utils.helpers import validate_key
 from airflow.utils.log.logging_mixin import LoggingMixin
 from airflow.utils.sqlalchemy import UtcDateTime, Interval
@@ -947,6 +948,69 @@ class DAG(BaseDag, LoggingMixin):
         for dr in drs:
             dr.state = state
             dirty_ids.append(dr.dag_id)
+
+    @provide_session
+    def cancel(
+            self, start_date=None, end_date=None,
+            confirm_prompt=False,
+            include_subdags=True,
+            dry_run=False,
+            session=None,
+    ):
+        """
+        Clears a set of task instances associated with the current dag for
+        a specified date range.
+        """
+        TI = TaskInstance
+        tis = session.query(TI)
+        if include_subdags:
+            # Crafting the right filter for dag_id and task_ids combo
+            conditions = []
+            for dag in self.subdags + [self]:
+                conditions.append(
+                    TI.dag_id.like(dag.dag_id) &
+                    TI.task_id.in_(dag.task_ids)
+                )
+            tis = tis.filter(or_(*conditions))
+        else:
+            tis = session.query(TI).filter(TI.dag_id == self.dag_id)
+            tis = tis.filter(TI.task_id.in_(self.task_ids))
+
+        if start_date:
+            tis = tis.filter(TI.execution_date >= start_date)
+        if end_date:
+            tis = tis.filter(TI.execution_date <= end_date)
+
+        tis = tis.filter(~TI.state.in_(State.finished()))
+
+        if dry_run:
+            tis = tis.all()
+            session.expunge_all()
+            return tis
+
+        count = tis.count()
+        do_it = True
+        if count == 0:
+            return 0
+        if confirm_prompt:
+            ti_list = "\n".join([str(t) for t in tis])
+            question = (
+                "You are about to cancel these {count} tasks:\n"
+                "{ti_list}\n\n"
+                "Are you sure? (yes/no): ").format(**locals())
+            do_it = utils.helpers.ask_yesno(question)
+
+        if do_it:
+            cancel_task_instances(tis.all(),
+                                  session,
+                                  dag=self,
+                                  )
+        else:
+            count = 0
+            print("Bail. Nothing was cancelled.")
+
+        session.commit()
+        return count
 
     @provide_session
     def clear(
@@ -1881,8 +1945,8 @@ class DagModel(Base):
         :param session: session
         """
         dag_ids = [self.dag_id]  # type: List[str]
+        dag = self.get_dag(store_serialized_dags)
         if including_subdags:
-            dag = self.get_dag(store_serialized_dags)
             if dag is None:
                 raise DagNotFound("Dag id {} not found".format(self.dag_id))
             subdags = dag.subdags
@@ -1895,6 +1959,15 @@ class DagModel(Base):
         except Exception:
             session.rollback()
             raise
+        toggle_state_str = 'OFF' if is_paused else 'ON'
+        to_email_address = dag.default_args.get('email', None)
+        if to_email_address:
+            email_subject = 'Airflow DAG {} Toggled {}'.format(self.dag_id, toggle_state_str)
+            email_content = (
+                'This is a notification that Airflow DAG: <b>{}</b> has been toggled {}.<br>'
+                'If this was intentional, feel free to ignore this email.'
+            ).format(self.dag_id, toggle_state_str)
+            send_email(to_email_address, email_subject, email_content)
 
     @classmethod
     @provide_session
