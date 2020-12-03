@@ -37,7 +37,7 @@ import pendulum
 import sqlalchemy as sqla
 from flask import (
     Markup, Response, flash, jsonify, make_response, redirect, render_template, request,
-    session as flask_session, url_for,
+    session as flask_session, url_for, g
 )
 from flask._compat import PY2
 from flask_appbuilder import BaseView, ModelView, expose, has_access
@@ -988,9 +988,12 @@ class Airflow(AirflowBaseView):
     @expose('/trigger', methods=['POST'])
     @has_dag_access(can_dag_edit=True)
     @has_access
-    @action_logging
     @provide_session
     def trigger(self, session=None):
+        # pass execution date into log_request so that we have it in the log row
+        execution_date = timezone.utcnow()
+        wwwutils.log_request(execution_date=execution_date)
+
         dag_id = request.values.get('dag_id')
         origin = request.values.get('origin') or url_for('Airflow.index')
         dag = session.query(models.DagModel).filter(models.DagModel.dag_id == dag_id).first()
@@ -998,7 +1001,6 @@ class Airflow(AirflowBaseView):
             flash("Cannot find dag {}".format(dag_id))
             return redirect(origin)
 
-        execution_date = timezone.utcnow()
         run_id = "manual__{0}".format(execution_date.isoformat())
 
         dr = DagRun.find(dag_id=dag_id, run_id=run_id)
@@ -1022,7 +1024,11 @@ class Airflow(AirflowBaseView):
         return redirect(origin)
 
     def _clear_dag_tis(self, dag, start_date, end_date, origin,
-                       recursive=False, confirmed=False, only_failed=False, cancel=False):
+                       event_name=None,
+                       recursive=False,
+                       confirmed=False,
+                       only_failed=False,
+                       cancel=False):
         from airflow.exceptions import AirflowException
         if confirmed:
             if cancel:
@@ -1066,6 +1072,20 @@ class Airflow(AirflowBaseView):
             flash("No task instances to clear", 'error')
             response = redirect(origin)
         else:
+            if event_name is not None:
+                # filter unique execution dates to log multiple dagruns being canceled
+                unique_execution_dates = set([t.execution_date for t in tis])
+                for exec_date in unique_execution_dates:
+                    session.add(Log(
+                        event_name,
+                        task_instance=None,
+                        owner='anonymous' if g.user.is_anonymous else g.user.username,
+                        dag_id=dag.dag_id,
+                        execution_date=exec_date,
+                        extra=str(list(request.values.items()))
+                    ))
+                session.commit()
+
             details = "\n".join([str(t) for t in tis])
 
             response = self.render_template(
@@ -1129,8 +1149,8 @@ class Airflow(AirflowBaseView):
     @expose('/dagrun_cancel', methods=['POST', 'GET'])
     @has_dag_access(can_dag_edit=True)
     @has_access
-    @action_logging
     def dagrun_cancel(self):
+        # action_logging is skipped so we can log each dagrun
         dag_id = request.args.get('dag_id')
         origin = request.args.get('origin') or "/"
         confirmed = request.form.get('confirmed') == "true"
@@ -1138,6 +1158,7 @@ class Airflow(AirflowBaseView):
         dag = dagbag.get_dag(dag_id)
 
         return self._clear_dag_tis(dag, None, None, origin,
+                                   event_name='dagrun_cancel',
                                    recursive=True, confirmed=confirmed, cancel=True)
 
 
@@ -2506,6 +2527,20 @@ class DagRunModelView(AirflowModelView):
                 count += 1
                 dr.start_date = timezone.utcnow()
                 dr.state = State.RUNNING
+
+                # log this action
+                dag = session.query(DagModel).filter(DagModel.dag_id == dr.dag_id).first()
+                session.add(
+                    Log(
+                        'dagrun_action_set_running',
+                        task_instance=None,
+                        owner='anonymous' if g.user.is_anonymous else g.user.username,
+                        dag_id=dr.dag_id,
+                        execution_date=dr.execution_date,
+                        extra=str(list(request.values.items()))
+                    )
+                )
+
             session.commit()
             flash("{count} dag runs were set to running".format(count=count))
         except Exception as ex:
@@ -2532,6 +2567,21 @@ class DagRunModelView(AirflowModelView):
                                                 dr.execution_date,
                                                 commit=True,
                                                 session=session)
+
+                # log this action
+                dag = session.query(DagModel).filter(DagModel.dag_id == dr.dag_id).first()
+                session.add(
+                    Log(
+                        'dagrun_action_set_failed',
+                        task_instance=None,
+                        owner='anonymous' if g.user.is_anonymous else g.user.username,
+                        dag_id=dr.dag_id,
+                        execution_date=dr.execution_date,
+                        extra=str(list(request.values.items()))
+                    )
+                )
+
+            session.commit()
             altered_ti_count = len(altered_tis)
             flash(
                 "{count} dag runs and {altered_ti_count} task instances "
@@ -2559,6 +2609,21 @@ class DagRunModelView(AirflowModelView):
                                                  dr.execution_date,
                                                  commit=True,
                                                  session=session)
+
+                # log this action
+                dag = session.query(DagModel).filter(DagModel.dag_id == dr.dag_id).first()
+                session.add(
+                    Log(
+                        'dagrun_action_set_success',
+                        task_instance=None,
+                        owner='anonymous' if g.user.is_anonymous else g.user.username,
+                        dag_id=dr.dag_id,
+                        execution_date=dr.execution_date,
+                        extra=str(list(request.values.items()))
+                    )
+                )
+
+            session.commit()
             altered_ti_count = len(altered_tis)
             flash(
                 "{count} dag runs and {altered_ti_count} task instances "
@@ -2655,9 +2720,11 @@ class TaskInstanceModelView(AirflowModelView):
                 models.clear_task_instances(tis, session=session, dag=dag)
 
             for ti in tis:
-                session.add(session.merge(ti))
-
+                session.add(
+                    Log('ti_list_clear', ti, extra=str(list(request.values.items())))
+                )
             session.commit()
+
             flash("{0} task instances have been cleared".format(len(tis)))
             self.update_redirect()
             return redirect(self.get_redirect())
@@ -2683,9 +2750,11 @@ class TaskInstanceModelView(AirflowModelView):
                 models.cancel_task_instances(tis, session, dag=dag)
 
             for ti in tis:
-                session.add(session.merge(ti))
-
+                session.add(
+                    Log('ti_list_cancel', ti, extra=str(list(request.values.items())))
+                )
             session.commit()
+
             flash("{0} task instances have been cancelled".format(len(tis)))
             self.update_redirect()
             return redirect(self.get_redirect())
@@ -2701,6 +2770,13 @@ class TaskInstanceModelView(AirflowModelView):
             count = len(tis)
             for ti in tis:
                 ti.set_state(target_state, session=session)
+                session.add(
+                    Log(
+                        'ti_action_set_{}'.format(target_state),
+                        ti,
+                        extra=str(list(request.values.items()))
+                    )
+                )
             session.commit()
             flash("{count} task instances were set to '{target_state}'".format(
                 count=count, target_state=target_state))

@@ -86,6 +86,16 @@ def trigger_dag(dag_id):
         replace_microseconds = to_boolean(data['replace_microseconds'])
 
     try:
+        with create_session() as session:
+            session.add(models.Log(
+                'api_trigger_dag',
+                task_instance=None,
+                owner='anonymous' if g.user.is_anonymous else g.user.username,
+                dag_id=dag_id,
+                execution_date=execution_date,
+                extra=str(list(request.values.items()))
+            ))
+            session.commit()
         dr = trigger.trigger_dag(dag_id, run_id, conf, execution_date, replace_microseconds)
     except AirflowException as err:
         _log.error(err)
@@ -281,7 +291,18 @@ def cancel_dag_run(dag_id):
     run_id = data['run_id']
 
     try:
-       dr = _cancel_dag_run(dag_id, run_id)
+        with create_session() as session:
+            dr = models.DagRun.find(dag_id=dag_id, run_id=run_id)[0]
+            session.add(models.Log(
+                'api_cancel_dagrun',
+                task_instance=None,
+                owner='anonymous' if g.user.is_anonymous else g.user.username,
+                dag_id=dag_id,
+                execution_date=dr.execution_date,
+                extra=str(list(request.values.items()))
+            ))
+            session.commit()
+        dr = _cancel_dag_run(dag_id, run_id)
     except AirflowException as err:
         _log.error(err)
         response = jsonify(error="{}".format(err))
@@ -314,7 +335,18 @@ def clear_dag_run(dag_id):
     run_id = data['run_id']
 
     try:
-       dr = _clear_dag_run(dag_id, run_id)
+        with create_session() as session:
+            dr = models.DagRun.find(dag_id=dag_id, run_id=run_id)[0]
+            session.add(models.Log(
+                'api_clear_dagrun',
+                task_instance=None,
+                owner='anonymous' if g.user.is_anonymous else g.user.username,
+                dag_id=dag_id,
+                execution_date=dr.execution_date,
+                extra=str(list(request.values.items()))
+            ))
+            session.commit()
+        dr = _clear_dag_run(dag_id, run_id)
     except AirflowException as err:
         _log.error(err)
         response = jsonify(error="{}".format(err))

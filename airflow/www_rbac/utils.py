@@ -35,7 +35,7 @@ from past.builtins import basestring
 
 from pygments import highlight, lexers
 from pygments.formatters import HtmlFormatter
-from flask import request, Response, Markup, url_for
+from flask import request, Response, Markup, url_for, g
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 import flask_appbuilder.models.sqla.filters as fab_sqlafilters
 import sqlalchemy as sqla
@@ -490,3 +490,30 @@ class CustomSQLAInterface(SQLAInterface):
         return False
 
     filter_converter_class = UtcAwareFilterConverter
+
+
+def log_request(*args, **kwargs):
+    """
+    helper function to actually create the log object and commit it
+    """
+    with create_session() as session:
+        if g.user.is_anonymous:
+            user = 'anonymous'
+        else:
+            user = g.user.username
+
+        log = Log(
+            event=f.__name__,
+            task_instance=None,
+            owner=user,
+            extra=str(list(request.values.items())),
+            task_id=request.values.get('task_id'),
+            dag_id=request.values.get('dag_id'))
+
+        if 'execution_date' in kwargs and kwargs['execution_date']:
+            log.execution_date = kwargs['execution_date']
+        if 'execution_date' in request.values:
+            log.execution_date = pendulum.parse(
+                request.values.get('execution_date'))
+
+        session.add(log)
