@@ -192,6 +192,9 @@ exclude_patterns = [
     '_api/airflow/configuration',
     '_api/airflow/contrib/auth',
     '_api/airflow/contrib/example_dags',
+    '_api/airflow/contrib/executors/index.rst',
+    '_api/airflow/contrib/executors/kubernetes_executor/index.rst',
+    '_api/airflow/contrib/executors/mesos_executor/index.rst',
     '_api/airflow/contrib/index.rst',
     '_api/airflow/contrib/kubernetes',
     '_api/airflow/contrib/task_runner',
@@ -255,7 +258,7 @@ keep_warnings = True
 
 intersphinx_mapping = {
     'boto3': ('https://boto3.amazonaws.com/v1/documentation/api/latest/', None),
-    'mongodb': ('https://api.mongodb.com/python/current/', None),
+    'mongodb': ('https://pymongo.readthedocs.io/en/stable/', None),
     'pandas': ('https://pandas.pydata.org/pandas-docs/stable/', None),
     'python': ('https://docs.python.org/3/', None),
     'requests': ('https://requests.readthedocs.io/en/master/', None),
@@ -528,4 +531,17 @@ if airflow_theme_is_available:
         'github_version': 'master',
         'display_github': 'master',
         'suffix': '.rst',
+    }
+
+    html_theme_options = {
+        'hide_website_buttons': False,
+        'navbar_links': [
+            {'href': '/community/', 'text': 'Community'},
+            {'href': '/meetups/', 'text': 'Meetups'},
+            {'href': '/docs/', 'text': 'Documentation'},
+            {'href': '/use-cases/', 'text': 'Use-cases'},
+            {'href': '/announcements/', 'text': 'Announcements'},
+            {'href': '/blog/', 'text': 'Blog'},
+            {'href': '/ecosystem/', 'text': 'Ecosystem'},
+        ]
     }

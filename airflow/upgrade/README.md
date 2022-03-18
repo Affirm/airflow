@@ -33,7 +33,7 @@ providing upgrade path (where the old code continues to work and prints out a de
 unfortunately some breaking changes where we couldn't provide a compatibility shim.
 
 The recommended upgrade path to get to Airflow 2.0.0 is to first upgrade to the latest release in the 1.10
-series (at the time of writing: 1.10.13) and to then run this script.
+series (at the time of writing: 1.10.15) and to then run this script.
 
 ```bash
 pip install apache-airflow-upgrade-check
@@ -49,11 +49,12 @@ For example:
 ```
 ============================================= STATUS =============================================
 
+Check for latest versions of apache-airflow and checker.................................SUCCESS
 Legacy UI is deprecated by default......................................................SUCCESS
 Users must set a kubernetes.pod_template_file value.....................................FAIL
 Changes in import paths of hooks, operators, sensors and others.........................FAIL
 Remove airflow.AirflowMacroPlugin class.................................................SUCCESS
-Jinja Template Variables cannot be undefined............................................SUCCESS
+Check versions of PostgreSQL, MySQL, and SQLite to ease upgrade to Airflow 2.0..........SUCCESS
 Fernet is enabled by default............................................................FAIL
 Logging configuration has been moved to new section.....................................SUCCESS
 Connection.conn_id is not unique........................................................SUCCESS
@@ -86,10 +87,13 @@ Additionally you can use "upgrade config" to:
 - extend the check using custom rules
 
 For example:
-```
+
+```bash
 airflow upgrade_check --config=/files/upgrade.yaml
 ```
+
 the configuration file should be a proper yaml file similar to this one:
+
 ```yaml
 ignored_rules:
   - LegacyUIDeprecated
@@ -100,3 +104,29 @@ custom_rules:
   - path.to.upgrade_module.VeryCustomCheckClass
   - path.to.upgrade_module.VeryCustomCheckClass2
 ```
+
+## Changelog
+
+### 1.3.0
+
+- Fix wrong warning about class that was not used in a dag file (#14700)
+- Fill DagBag from `dag_folder` setting for upgrade rules (#14588)
+- Bugfix: False positives for Custom Executors via Plugins check (#14680)
+- Bugfix: Fix False alarm in import changes rule (#14493)
+- Use `CustomSQLAInterface` instead of `SQLAInterface` (#14475)
+- Fix comparing airflow version to work with older versions of packaging library (#14435)
+- Fix Incorrect warning in upgrade check and error in reading file (#14344)
+- Handle possible suffix in MySQL version + avoid hard-coding (#14274)
+
+### 1.2.0
+
+- Add upgrade check option to list checks (#13392)
+- Add clearer exception for read failures in macro plugin upgrade (#13371)
+- Treat default value in ``HostnameCallable`` rule as good one (#13670)
+- Created ``CustomExecutorsRequireFullPathRule`` class (#13678)
+- Remove ``UndefinedJinjaVariableRule``
+- Created rule for ``SparkJDBCOperator`` class ``conn_id`` (#13798)
+- Created ``DatabaseVersionCheckRule`` class (#13955)
+- Add Version command for Upgrade Check (#12929)
+- Use Tabular Format for the List of Upgrade Check Rules (#14139)
+- Fix broken ``airflow upgrade_check`` command (#14137)

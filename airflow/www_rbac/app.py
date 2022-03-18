@@ -83,6 +83,8 @@ def create_app(config=None, session=None, testing=False, app_name="Airflow"):
     csrf.init_app(app)
 
     db = SQLA(app)
+    from airflow.utils.sqlalchemy import setup_event_handlers
+    setup_event_handlers(db.session.get_bind())
 
     from airflow import api
     api.load_auth()
@@ -158,9 +160,9 @@ def create_app(config=None, session=None, testing=False, app_name="Airflow"):
                                 category="Admin")
 
             if "dev" in version.version:
-                airflow_doc_site = "https://airflow.readthedocs.io/en/latest"
+                airflow_doc_site = "https://s.apache.org/airflow-docs"
             else:
-                airflow_doc_site = 'https://airflow.apache.org/docs/{}'.format(version.version)
+                airflow_doc_site = 'https://airflow.apache.org/docs/apache-airflow/{}'.format(version.version)
 
             appbuilder.add_link("Documentation",
                                 href=airflow_doc_site,

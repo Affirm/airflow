@@ -395,6 +395,10 @@ def _vars_wrapper(args, get=None, set=None, delete=None, export=None, imp=None):
     variables(args)
 
 
+def variables_list(args):
+    _vars_wrapper(args)
+
+
 def variables_get(args):
     _vars_wrapper(args, get=args.key)
 
@@ -415,7 +419,7 @@ def variables_export(args):
     _vars_wrapper(args, export=args.file)
 
 
-@cli_utils.deprecated_action(new_name='variables')
+@cli_utils.deprecated_action(new_name='variables list')
 @cli_utils.action_logging
 def variables(args):
     if args.get:
@@ -858,7 +862,8 @@ def clear(args):
                 task_regex=args.task_regex,
                 include_downstream=args.downstream,
                 include_upstream=args.upstream)
-
+    if args.yes:
+        args.no_confirm = args.yes
     DAG.clear_dags(
         dags,
         start_date=args.start_date,
@@ -1086,13 +1091,13 @@ class GunicornMonitor(LoggingMixin):
             num_workers_running = self._get_num_workers_running()
             if num_workers_running < self.num_workers_expected:
                 new_worker_count = min(
-                    num_workers_running - self.worker_refresh_batch_size, self.worker_refresh_batch_size
+                    self.num_workers_expected - num_workers_running, self.worker_refresh_batch_size
                 )
-                self.log.debug(
+                self.log.info(
                     '[%d / %d] Spawning %d workers',
                     num_ready_workers_running, num_workers_running, new_worker_count
                 )
-                self._spawn_new_workers(num_workers_running)
+                self._spawn_new_workers(new_worker_count)
             return
 
         # Now the number of running and expected worker should be equal
@@ -1373,10 +1378,11 @@ def kubernetes_generate_dag_yaml(args):
             try_number=ti.try_number,
             date=ti.execution_date,
             command=ti.command_as_list(),
-            kube_executor_config=PodGenerator.from_obj(ti.executor_config),
+            kube_image=kube_config.kube_image,
+            pod_override_object=PodGenerator.from_obj(ti.executor_config),
             worker_uuid="worker-config",
             namespace=kube_config.executor_namespace,
-            worker_config=WorkerConfiguration(kube_config=kube_config).as_pod()
+            base_worker_pod=WorkerConfiguration(kube_config=kube_config).as_pod()
         )
         api_client = ApiClient()
         pod = PodLauncher._mutate_pod_backcompat(pod)
@@ -2582,7 +2588,10 @@ ARG_LOG_FILE = Arg(("-l", "--log-file"), help="Location of the log file")
 ARG_YES = Arg(
     ("-y", "--yes"), help="Do not prompt to confirm reset. Use with care!", action="store_true", default=False
 )
-
+ARG_NO_CONFIRM = Arg(
+    ("-c", "--no_confirm"), help="Do not request confirmation. Use with care!", action="store_true",
+    default=False
+)
 # list_dag_runs
 ARG_DAG_ID_OPT = Arg(("-d", "--dag-id"), help="The id of the dag")
 ARG_NO_BACKFILL = Arg(
@@ -2939,6 +2948,7 @@ TASKS_COMMANDS = (
             ARG_UPSTREAM,
             ARG_DOWNSTREAM,
             ARG_YES,
+            ARG_NO_CONFIRM,
             ARG_ONLY_FAILED,
             ARG_ONLY_RUNNING,
             ARG_EXCLUDE_SUBDAGS,
@@ -3072,6 +3082,12 @@ POOLS_COMMANDS = (
 )
 VARIABLES_COMMANDS = (
     ActionCommand(
+        name='list',
+        help='List variables',
+        func=variables_list,
+        args=(NOT_DEPRECATED,),
+    ),
+    ActionCommand(
         name='get',
         help='Get variable',
         func=variables_get,
@@ -3118,7 +3134,7 @@ DB_COMMANDS = (
     ActionCommand(
         name='upgrade',
         help="Upgrade the metadata database to latest version",
-        func=upgrade_check,
+        func=upgradedb,
         args=(NOT_DEPRECATED,),
     ),
     ActionCommand(
@@ -4019,7 +4035,7 @@ class CLIFactory(object):
             'help': "Clear a set of task instance, as if they never ran",
             'args': (
                 'dag_id', 'task_regex', 'start_date', 'end_date', 'subdir',
-                'upstream', 'downstream', 'no_confirm', 'only_failed',
+                'upstream', 'downstream', 'no_confirm', 'only_failed', 'yes',
                 'only_running', 'exclude_subdags', 'exclude_parentdag', 'dag_regex'),
         }, {
             'func': pause,

@@ -15,7 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import sys
 from tempfile import NamedTemporaryFile
+
+import pytest
+
 from tests.compat import mock
 
 from airflow.upgrade.rules.import_changes import ImportChange, ImportChangesRule
@@ -25,6 +29,7 @@ NEW_CLASS = "NewOperator"
 PROVIDER = "dummy"
 OLD_PATH = "airflow.contrib." + OLD_CLASS
 NEW_PATH = "airflow.providers." + PROVIDER + "." + NEW_CLASS
+OLD_PATH_WITHOUT_CLASS_NAME = "airflow.contrib"
 
 
 class TestImportChange:
@@ -34,16 +39,14 @@ class TestImportChange:
         )
         assert change.info(
             "file.py"
-        ) == "Using `{}` will be replaced by `{}` and requires `{}` providers package. " \
-             "Affected file: file.py".format(OLD_PATH, NEW_PATH, PROVIDER)
-        assert change.old_class == OLD_CLASS
+        ) == "Using `{}` should be replaced by `{}`. Affected file: file.py".format(OLD_PATH, NEW_PATH)
+        assert change.old_path_without_classname == OLD_PATH_WITHOUT_CLASS_NAME
         assert change.new_class == NEW_CLASS
 
     def test_from_new_old_paths(self):
         paths_tuple = (NEW_PATH, OLD_PATH)
         change = ImportChange.from_new_old_paths(*paths_tuple)
-        assert change.info() == "Using `{}` will be replaced by `{}` and requires `{}` " \
-                                "providers package".format(OLD_PATH, NEW_PATH, PROVIDER)
+        assert change.info() == "Using `{}` should be replaced by `{}`".format(OLD_PATH, NEW_PATH)
 
 
 class TestImportChangesRule:
@@ -53,16 +56,49 @@ class TestImportChangesRule:
         [ImportChange.from_new_old_paths(NEW_PATH, OLD_PATH)],
     )
     def test_check(self, mock_list_files):
-        with NamedTemporaryFile("w+") as temp:
+        with NamedTemporaryFile("w+", suffix=".py") as temp:
             mock_list_files.return_value = [temp.name]
 
             temp.write("from airflow.contrib import %s" % OLD_CLASS)
             temp.flush()
-            msgs = ImportChangesRule().check()
+            msgs = list(ImportChangesRule().check())
 
-        assert len(msgs) == 1
+        assert len(msgs) == 2
         msg = msgs[0]
+        assert msg == 'Please install `apache-airflow-backport-providers-dummy`'
+        msg = msgs[1]
         assert temp.name in msg
         assert OLD_PATH in msg
         assert OLD_CLASS in msg
-        assert "requires `{}`".format(PROVIDER) in msg
+
+    @mock.patch("airflow.upgrade.rules.import_changes.list_py_file_paths")
+    @mock.patch(
+        "airflow.upgrade.rules.import_changes.ImportChangesRule.ALL_CHANGES",
+        [ImportChange.from_new_old_paths(NEW_PATH, OLD_PATH)],
+    )
+    def test_non_py_files_are_ignored(self, mock_list_files):
+        with NamedTemporaryFile("w+", suffix=".txt") as temp:
+            mock_list_files.return_value = [temp.name]
+
+            temp.write("from airflow.contrib import %s" % OLD_CLASS)
+            temp.flush()
+            msgs = list(ImportChangesRule().check())
+        assert len(msgs) == 0
+
+    @mock.patch("airflow.upgrade.rules.import_changes.list_py_file_paths")
+    @mock.patch(
+        "airflow.upgrade.rules.import_changes.ImportChangesRule.ALL_CHANGES",
+        [ImportChange.from_new_old_paths(NEW_PATH, OLD_PATH)],
+    )
+    @pytest.mark.skipif(
+        sys.version_info.major == 2,
+        reason="Test is irrelevant in Python 2.7 because of unicode differences"
+    )
+    def test_decode_error_are_handled(self, mock_list_files):
+        with NamedTemporaryFile("wb+", suffix=".py") as temp:
+            mock_list_files.return_value = [temp.name]
+
+            temp.write(b"from airflow \x03\x96")
+            temp.flush()
+            msgs = list(ImportChangesRule().check())
+        assert msgs[0] == "Unable to read python file {}".format(temp.name)

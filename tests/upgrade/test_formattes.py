@@ -16,12 +16,13 @@
 # under the License.
 import json
 from tempfile import NamedTemporaryFile
-from tests.compat import mock
 
 import pytest
 
 from airflow.bin import cli
+from airflow.upgrade.checker import run
 from airflow.upgrade.rules.base_rule import BaseRule
+from tests.compat import mock
 
 MESSAGES = ["msg1", "msg2"]
 
@@ -34,8 +35,16 @@ class MockRule(BaseRule):
         return MESSAGES
 
 
+class MockRuleToSkip(BaseRule):
+    title = "title"
+    description = "description"
+
+    def should_skip(self):
+        return "Yes, skipp this rule"
+
+
 class TestJSONFormatter:
-    @mock.patch("airflow.upgrade.checker.ALL_RULES", [MockRule()])
+    @mock.patch("airflow.upgrade.checker.ALL_RULES", [MockRule(), MockRuleToSkip()])
     @mock.patch("airflow.upgrade.checker.logging.disable")  # mock to avoid side effects
     def test_output(self, _):
         expected = [
@@ -43,13 +52,18 @@ class TestJSONFormatter:
                 "rule": MockRule.__name__,
                 "title": MockRule.title,
                 "messages": MESSAGES,
+            },
+            {
+                "rule": MockRuleToSkip.__name__,
+                "title": MockRuleToSkip.title,
+                "messages": ["Yes, skipp this rule"],
             }
         ]
         parser = cli.CLIFactory.get_parser()
         with NamedTemporaryFile("w+", suffix=".json") as temp:
             with pytest.raises(SystemExit):
                 args = parser.parse_args(['upgrade_check', '-s', temp.name])
-                args.func(args)
+                run(args)
             content = temp.read()
 
         assert json.loads(content) == expected

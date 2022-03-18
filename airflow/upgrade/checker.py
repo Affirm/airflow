@@ -19,6 +19,7 @@ from __future__ import absolute_import
 import argparse
 import logging
 import sys
+from tabulate import tabulate
 from typing import List
 
 from airflow.upgrade.formatters import BaseFormatter
@@ -41,6 +42,16 @@ def check_upgrade(formatter, rules):
     return all_rule_statuses
 
 
+def list_checks():
+    print()
+    rules = (
+        (rule.__class__.__name__, rule.title)
+        for rule in ALL_RULES
+    )
+    print(tabulate(rules, headers=["Rule Name", "Description"]))
+    print()
+
+
 def register_arguments(subparser):
     subparser.add_argument(
         "-s", "--save",
@@ -49,18 +60,37 @@ def register_arguments(subparser):
     subparser.add_argument(
         "-i", "--ignore",
         help="Ignore a rule. Can be used multiple times.",
-        action='append',
+        action="append",
     )
     subparser.add_argument(
         "-c", "--config",
         help="Path to upgrade check config yaml file.",
     )
+    subparser.add_argument(
+        "-l", "--list",
+        help="List the upgrade checks and their class names",
+        action="store_true",
+    )
+    subparser.add_argument(
+        "-V", "--version",
+        help="Show the version of upgrade_check",
+        action="store_true",
+    )
     subparser.set_defaults(func=run)
 
 
 def run(args):
-    from airflow.upgrade.formatters import (ConsoleFormatter, JSONFormatter)
+    from airflow.upgrade.formatters import ConsoleFormatter, JSONFormatter
     from airflow.upgrade.config import UpgradeConfig
+
+    if args.version:
+        from airflow.upgrade.version import version
+        print(version)
+        return
+
+    if args.list:
+        list_checks()
+        return
 
     if args.save:
         filename = args.save
@@ -85,8 +115,9 @@ def run(args):
     # We want to show only output of upgrade_check command
     logging.disable(logging.ERROR)
 
-    all_problems = check_upgrade(formatter, rules)
-    if all_problems:
+    all_rule_statuses = check_upgrade(formatter, rules)
+    any_problems = any(rule.is_problem for rule in all_rule_statuses)
+    if any_problems:
         sys.exit(1)
 
 
@@ -94,4 +125,11 @@ def __main__():
     parser = argparse.ArgumentParser()
     register_arguments(parser)
     args = parser.parse_args()
-    args.func(args)
+    if args.list:
+        list_checks()
+    else:
+        run(args)
+
+
+if __name__ == "__main__":
+    __main__()
