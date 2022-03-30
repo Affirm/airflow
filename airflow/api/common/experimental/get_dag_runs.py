@@ -25,12 +25,13 @@ from airflow.api.common.experimental import check_and_get_dag
 from airflow.models import DagRun
 
 
-def get_dag_runs(dag_id, state=None, run_url_route='Airflow.graph'):
-    # type: (str, Optional[str], str) -> List[Dict[str, Any]]
+def get_dag_runs(dag_id, state=None, run_url_route='Airflow.graph', **kwargs):
     """
     Returns a list of Dag Runs for a specific DAG ID.
 
     :param dag_id: String identifier of a DAG
+    :param dagrun_id: String identifier of a run_id
+    :param execution_date_gte: datetime for which to return all objects greater than or equal to
     :param state: queued|running|success...
     :return: List of DAG runs of a DAG with requested state,
         or all runs if the state is not specified
@@ -39,7 +40,12 @@ def get_dag_runs(dag_id, state=None, run_url_route='Airflow.graph'):
 
     dag_runs = list()
     state = state.lower() if state else None
-    for run in DagRun.find(dag_id=dag_id, state=state):
+    for run in DagRun.find(
+        dag_id=dag_id,
+        state=state,
+        run_id=kwargs.get('dagrun_id'),
+        execution_date_gte=kwargs.get('execution_date_gte')
+    ):
         dag_runs.append({
             'id': run.id,
             'run_id': run.run_id,

@@ -158,6 +158,12 @@
                   <span class="glyphicon glyphicon-play-circle" aria-hidden="true" data-original-title="Trigger Dag"></span>
                 </a>
 
+                <!-- Cancel Dag Runs -->
+                <a href="{{ url_for('Airflow.dagrun_cancel', dag_id=dag.dag_id) }}"
+                   onclick="return confirmCancelDagRun('{{ dag.safe_dag_id }}')">
+                    <span class="glyphicon glyphicon-remove" aria-hidden="true" data-original-title="Cancel Dag Run"></span>
+                </a>
+
                 <!-- Tree -->
                 <a href="{{ url_for('Airflow.tree', dag_id=dag.dag_id, num_runs=num_runs) }}">
                   <span class="glyphicon glyphicon-tree-deciduous" aria-hidden="true" data-original-title="Tree View"></span>
@@ -195,23 +201,16 @@
 
                 <!-- Logs -->
                 <a href="{{ url_for('LogModelView.list') }}?_flt_3_dag_id={{ dag.dag_id }}&_od_LogModelView=desc&_oc_LogModelView=dttm">
-                  <span class="glyphicon glyphicon-align-justify" aria-hidden="true" data-original-title="Logs"></span>
+                    <span class="glyphicon glyphicon-align-justify" aria-hidden="true" data-original-title="Logs"></span>
                 </a>
-              {% endif %}
+                {% endif %}
 
-              <!-- Refresh -->
-              <a href="{{ url_for("Airflow.refresh", dag_id=dag.dag_id) }}" onclick="postAsForm(this.href); return false">
-                <span class="glyphicon glyphicon-refresh" aria-hidden="true" data-original-title="Refresh"></span>
-              </a>
-
-              <!-- Delete -->
-              <!-- Use dag_id instead of dag.dag_id, because the DAG might not exist in the webserver's DagBag -->
-              <a href="{{ url_for('Airflow.delete', dag_id=dag.dag_id) }}"
-                onclick="return confirmDeleteDag(this, '{{ dag.dag_id }}')">
-                <span class="glyphicon glyphicon-remove-circle" style="color:red" aria-hidden="true" data-original-title="Delete Dag"></span>
-              </a>
-            </td>
-          </tr>
+                <!-- Refresh -->
+                <a href="{{ url_for("Airflow.refresh", dag_id=dag.dag_id) }}" onclick="postAsForm(this.href); return false">
+                  <span class="glyphicon glyphicon-refresh" aria-hidden="true" data-original-title="Refresh"></span>
+                </a>
+                </td>
+            </tr>
         {% endfor %}
       </tbody>
     </table>
@@ -267,22 +266,16 @@
       window.location = DAGS_INDEX + "?page_size=" + p_size;
     });
 
-    function confirmTriggerDag(link, dag_id){
-      if (confirm("Are you sure you want to run '"+dag_id+"' now?")) {
+    function confirmTriggerDag(link, dag_id) {
+      if (confirm("Are you sure you want to run '" + dag_id + "' now?")) {
         postAsForm(link.href, {});
       }
       // Never follow the link
       return false;
     }
 
-    function confirmDeleteDag(link, dag_id){
-      if (confirm("Are you sure you want to delete '"+dag_id+"' now?\n\
-        This option will delete ALL metadata, DAG runs, etc.\n\
-        EXCEPT Log.\n\
-        This cannot be undone.")) {
-        postAsForm(link.href, {});
-      }
-      return false;
+    function confirmCancelDagRun(dag_id){
+        return confirm("Are you sure you want to cancel ALL active runs of '"+dag_id+"'?");
     }
 
     var encoded_dag_ids = new URLSearchParams();

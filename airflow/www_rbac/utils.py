@@ -26,12 +26,14 @@ import inspect
 import json
 import time
 import markdown
+import pendulum
 
 from builtins import str
 from past.builtins import basestring
 
 from pygments import highlight, lexers
 from pygments.formatters import HtmlFormatter
+from flask import g
 from flask import Markup, Response, request, url_for
 from flask_appbuilder.forms import FieldConverter
 from flask_appbuilder.models.sqla.interface import SQLAInterface
@@ -40,9 +42,10 @@ import sqlalchemy as sqla
 from six.moves.urllib.parse import urlencode
 
 from airflow.configuration import conf
-from airflow.models import BaseOperator
+from airflow.models import BaseOperator, Log
 from airflow.operators.subdag_operator import SubDagOperator
 from airflow.utils import timezone
+from airflow.utils.db import create_session
 from airflow.utils.json import AirflowJsonEncoder
 from airflow.utils.state import State
 from airflow.www_rbac.forms import DateTimeWithTimezoneField
@@ -471,3 +474,30 @@ FieldConverter.conversion_table = (
     (('is_utcdatetime', DateTimeWithTimezoneField, AirflowDateTimePickerWidget),) +
     FieldConverter.conversion_table
 )
+
+
+def log_request(f_name, *args, **kwargs):
+    """
+    helper function to actually create the log object and commit it
+    """
+    with create_session() as session:
+        if g.user.is_anonymous:
+            user = 'anonymous'
+        else:
+            user = g.user.username
+
+        log = Log(
+            event=f_name,
+            task_instance=None,
+            owner=user,
+            extra=str(list(request.values.items())),
+            task_id=request.values.get('task_id'),
+            dag_id=request.values.get('dag_id'))
+
+        if 'execution_date' in kwargs and kwargs['execution_date']:
+            log.execution_date = kwargs['execution_date']
+        if 'execution_date' in request.values:
+            log.execution_date = pendulum.parse(
+                request.values.get('execution_date'))
+
+        session.add(log)

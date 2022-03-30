@@ -74,6 +74,7 @@ from airflow.models import (
 from airflow.ti_deps.dep_context import (DepContext, SCHEDULER_QUEUED_DEPS)
 from airflow.typing_compat import Protocol
 from airflow.utils import cli as cli_utils, db
+from airflow.utils.lock import initialize as scheduler_lock_init
 from airflow.utils.dot_renderer import render_dag
 from airflow.utils.net import get_hostname
 from airflow.utils.timezone import parse as parsedate
@@ -1630,6 +1631,12 @@ def initdb(args):  # noqa
     py2_deprecation_waring()
     print("DB: " + repr(settings.engine.url))
     db.initdb(settings.RBAC)
+    print("Done.")
+
+
+def initscheduler(args):  # noqa
+    print("Initializing the resources for the scheduler")
+    scheduler_lock_init()
     print("Done.")
 
 
@@ -4074,6 +4081,10 @@ class CLIFactory(object):
         }, {
             'func': initdb,
             'help': "Initialize the metadata database",
+            'args': tuple(),
+        },  {
+            'func': initscheduler,
+            'help': "Initialize the resources for the scheduler",
             'args': tuple(),
         }, {
             'func': list_dags,

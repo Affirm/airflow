@@ -37,7 +37,7 @@ import pendulum
 import sqlalchemy as sqla
 from flask import (
     Markup, Response, escape, flash, jsonify, make_response, redirect, render_template, request,
-    session as flask_session, url_for,
+    session as flask_session, url_for, g
 )
 from flask._compat import PY2
 from flask_appbuilder import BaseView, ModelView, expose, has_access, permission_name
@@ -173,6 +173,20 @@ def get_date_time_num_runs_dag_runs_form_data(request, session, dag):
         'dr_choices': dr_choices,
         'dr_state': dr_state,
     }
+
+
+def _add_log_event_to_session(session, event_name, execution_date,
+                              dag_id=None,
+                              task_instance=None):
+    log = Log(
+        event_name,
+        task_instance=task_instance,
+        owner='anonymous' if g.user.is_anonymous else g.user.username,
+        dag_id=dag_id if dag_id is not None else task_instance.dag_id,
+        execution_date=execution_date,
+        extra=str(list(request.values.items()))
+    )
+    session.add(log)
 
 
 ######################################################################################
@@ -1059,9 +1073,11 @@ class Airflow(AirflowBaseView):
     @expose('/trigger', methods=['POST', 'GET'])
     @has_dag_access(can_dag_edit=True)
     @has_access
-    @action_logging
     @provide_session
     def trigger(self, session=None):
+        # pass execution date into log_request so that we have it in the log row
+        execution_date = timezone.utcnow()
+        wwwutils.log_request('trigger', execution_date=execution_date)
 
         dag_id = request.values.get('dag_id')
         origin = get_safe_url(request.values.get('origin'))
@@ -1079,7 +1095,6 @@ class Airflow(AirflowBaseView):
             flash("Cannot find dag {}".format(dag_id))
             return redirect(origin)
 
-        execution_date = timezone.utcnow()
         run_id = "manual__{0}".format(execution_date.isoformat())
 
         dr = DagRun.find(dag_id=dag_id, run_id=run_id)
@@ -1115,31 +1130,49 @@ class Airflow(AirflowBaseView):
             "it should start any moment now.".format(dag_id))
         return redirect(origin)
 
-    def _clear_dag_tis(self, dag, start_date, end_date, origin,
-                       recursive=False, confirmed=False, only_failed=False):
+    @provide_session
+    def _clear_dag_tis(self, dag, start_date, end_date, origin, event_name,
+                       recursive=False,
+                       confirmed=False,
+                       only_failed=False,
+                       cancel=False,
+                       is_task_instance=False,
+                       session=None):
         from airflow.exceptions import AirflowException
-
         if confirmed:
-            count = dag.clear(
-                start_date=start_date,
-                end_date=end_date,
-                include_subdags=recursive,
-                include_parentdag=recursive,
-                only_failed=only_failed,
-            )
+            if cancel:
+                count = dag.cancel(
+                    start_date=start_date,
+                    end_date=end_date,
+                    include_subdags=recursive)
+            else:
+                count = dag.clear(
+                    start_date=start_date,
+                    end_date=end_date,
+                    include_subdags=recursive,
+                    include_parentdag=recursive,
+                    only_failed=only_failed)
 
-            flash("{0} task instances have been cleared".format(count))
+            flash("{0} task instances have been {1}".format(count, 'cleared' if not cancel else 'cancelled'))
             return redirect(origin)
 
         try:
-            tis = dag.clear(
-                start_date=start_date,
-                end_date=end_date,
-                include_subdags=recursive,
-                include_parentdag=recursive,
-                only_failed=only_failed,
-                dry_run=True,
-            )
+            if cancel:
+                tis = dag.cancel(
+                    start_date=start_date,
+                    end_date=end_date,
+                    include_subdags=recursive,
+                    dry_run=True,
+                )
+            else:
+                tis = dag.clear(
+                    start_date=start_date,
+                    end_date=end_date,
+                    include_subdags=recursive,
+                    include_parentdag=recursive,
+                    only_failed=only_failed,
+                    dry_run=True,
+                )
         except AirflowException as ex:
             flash(str(ex), 'error')
             return redirect(origin)
@@ -1148,12 +1181,30 @@ class Airflow(AirflowBaseView):
             flash("No task instances to clear", 'error')
             response = redirect(origin)
         else:
+            if is_task_instance:
+                for t in tis:
+                    _add_log_event_to_session(session,
+                                              event_name,
+                                              t.execution_date,
+                                              dag_id=dag.dag_id,
+                                              task_instance=t)
+            else:
+                # filter unique execution dates to log multiple dagruns being canceled
+                unique_execution_dates = set([t.execution_date for t in tis])
+                for exec_date in unique_execution_dates:
+                    _add_log_event_to_session(session,
+                                              event_name,
+                                              exec_date,
+                                              dag_id=dag.dag_id)
+
+            session.commit()
+
             details = "\n".join([str(t) for t in tis])
 
             response = self.render_template(
                 'airflow/confirm.html',
                 message=("Here's the list of task instances you are about "
-                         "to clear:"),
+                         "to {0}:".format('clear' if not cancel else 'cancel')),
                 details=details)
 
         return response
@@ -1161,7 +1212,6 @@ class Airflow(AirflowBaseView):
     @expose('/clear', methods=['POST'])
     @has_dag_access(can_dag_edit=True)
     @has_access
-    @action_logging
     def clear(self):
         dag_id = request.form.get('dag_id')
         task_id = request.form.get('task_id')
@@ -1186,13 +1236,15 @@ class Airflow(AirflowBaseView):
         end_date = execution_date if not future else None
         start_date = execution_date if not past else None
 
-        return self._clear_dag_tis(dag, start_date, end_date, origin,
-                                   recursive=recursive, confirmed=confirmed, only_failed=only_failed)
+        return self._clear_dag_tis(dag, start_date, end_date, origin, 'clear',
+                                   recursive=recursive,
+                                   confirmed=confirmed,
+                                   is_task_instance=True,
+                                   only_failed=only_failed)
 
     @expose('/dagrun_clear', methods=['POST'])
     @has_dag_access(can_dag_edit=True)
     @has_access
-    @action_logging
     def dagrun_clear(self):
         dag_id = request.form.get('dag_id')
         origin = get_safe_url(request.form.get('origin'))
@@ -1204,8 +1256,61 @@ class Airflow(AirflowBaseView):
         start_date = execution_date
         end_date = execution_date
 
-        return self._clear_dag_tis(dag, start_date, end_date, origin,
-                                   recursive=True, confirmed=confirmed)
+        return self._clear_dag_tis(dag, start_date, end_date, origin, 'dagrun_clear',
+                                   recursive=True,
+                                   confirmed=confirmed)
+
+    @expose('/dagrun_cancel', methods=['POST', 'GET'])
+    @has_dag_access(can_dag_edit=True)
+    @has_access
+    def dagrun_cancel(self):
+        # cancels all dagruns. action_logging is skipped so we can log each dagrun
+        dag_id = request.args.get('dag_id')
+        origin = request.args.get('origin') or "/"
+        confirmed = request.form.get('confirmed') == "true"
+
+        dag = dagbag.get_dag(dag_id)
+
+        return self._clear_dag_tis(dag, None, None, origin, 'dagrun_cancel_all',
+                                   recursive=True,
+                                   confirmed=confirmed,
+                                   cancel=True)
+
+    @expose('/cancel_dagrun', methods=['POST'])
+    @has_dag_access(can_dag_edit=True)
+    @has_access
+    def cancel_specific_dagrun(self):
+        # cancel specific dagrun
+        dag_id = request.form['dag_id']
+        origin = request.form['origin']
+        # it seems sqlalchemy wont work with Pendulum datetimes so we have to get its private datetime
+        execution_date = pendulum.parse(request.form['execution_date'])._datetime
+        confirmed = request.form.get('confirmed') == "true"
+        dag = dagbag.get_dag(dag_id)
+        return self._clear_dag_tis(dag, execution_date, execution_date, origin, 'dagrun_cancel',
+                                   recursive=True,
+                                   confirmed=confirmed,
+                                   cancel=True)
+
+    @expose('/cancel', methods=['POST'])
+    @has_dag_access(can_dag_edit=True)
+    @has_access
+    def cancel(self):
+        dag_id = request.form['dag_id']
+        origin = request.form['origin']
+        task_id = request.form['task_id']
+        execution_date = pendulum.parse(request.form['execution_date'])._datetime
+        confirmed = request.form.get('confirmed') == "true"
+        dag = dagbag.get_dag(dag_id)
+        dag = dag.sub_dag(
+            task_regex=r"^{0}$".format(task_id),
+            include_downstream=False,
+            include_upstream=False)
+        return self._clear_dag_tis(dag, execution_date, execution_date, origin, 'cancel',
+                                   recursive=True,
+                                   confirmed=confirmed,
+                                   is_task_instance=True,
+                                   cancel=True)
 
     @expose('/blocked', methods=['POST'])
     @has_access
@@ -2589,12 +2694,21 @@ class DagRunModelView(AirflowModelView):
                 count += 1
                 dr.start_date = timezone.utcnow()
                 dr.state = State.RUNNING
+
+                # log this action
+                _add_log_event_to_session(session,
+                                          'dagrun_list_set_running',
+                                          dr.execution_date,
+                                          dag_id=dr.dag_id)
+
+
             session.commit()
             flash("{count} dag runs were set to running".format(count=count))
-        except Exception as ex:
-            flash(str(ex), 'error')
-            flash('Failed to set state', 'error')
-        return redirect(self.get_default_url())
+        except Exception as e:
+            flash('Failed to set state: {}'.format(e), 'error')
+
+        self.update_redirect()
+        return redirect(self.get_redirect())
 
     @action('set_failed', "Set state to 'failed'",
             "All running task instances would also be marked as failed, are you sure?",
@@ -2615,13 +2729,23 @@ class DagRunModelView(AirflowModelView):
                                                 dr.execution_date,
                                                 commit=True,
                                                 session=session)
+
+                # log this action
+                _add_log_event_to_session(session,
+                                          'dagrun_list_set_failed',
+                                          dr.execution_date,
+                                          dag_id=dr.dag_id)
+
+            session.commit()
             altered_ti_count = len(altered_tis)
             flash(
                 "{count} dag runs and {altered_ti_count} task instances "
                 "were set to failed".format(count=count, altered_ti_count=altered_ti_count))
-        except Exception:
-            flash('Failed to set state', 'error')
-        return redirect(self.get_default_url())
+        except Exception as e:
+            flash('Failed to set state: {}'.format(e), 'error')
+
+        self.update_redirect()
+        return redirect(self.get_redirect())
 
     @action('set_success', "Set state to 'success'",
             "All task instances would also be marked as success, are you sure?",
@@ -2642,13 +2766,54 @@ class DagRunModelView(AirflowModelView):
                                                  dr.execution_date,
                                                  commit=True,
                                                  session=session)
+
+                # log this action
+                _add_log_event_to_session(session,
+                                          'dagrun_list_set_success',
+                                          dr.execution_date,
+                                          dag_id=dr.dag_id)
+
+            session.commit()
             altered_ti_count = len(altered_tis)
             flash(
                 "{count} dag runs and {altered_ti_count} task instances "
                 "were set to success".format(count=count, altered_ti_count=altered_ti_count))
-        except Exception:
-            flash('Failed to set state', 'error')
-        return redirect(self.get_default_url())
+        except Exception as e:
+            flash('Failed to set state: {}'.format(e), 'error')
+
+        self.update_redirect()
+        return redirect(self.get_redirect())
+
+    @action('set_canceled', "Cancel",
+            "All task instances for the selected DAG Runs will be canceled. Are you sure?",
+            single=False)
+    @provide_session
+    def action_set_canceled(self, drs, session=None):
+        dagrun_count = 0
+        task_instance_count = 0
+        try:
+            for dr in session.query(models.DagRun).filter(models.DagRun.id.in_([dagrun.id for dagrun in drs])).all():
+                dag = dagbag.get_dag(dr.dag_id)
+                task_instance_count += dag.cancel(
+                    start_date=dr.execution_date,
+                    end_date=dr.execution_date,
+                    include_subdags=True)
+                dagrun_count += 1
+
+                # log this action
+                _add_log_event_to_session(session,
+                                          'dagrun_list_set_canceled',
+                                          dr.execution_date,
+                                          dag_id=dr.dag_id)
+        except Exception as e:
+            flash('Failed to set state to canceled: {}'.format(e), 'error')
+        finally:
+            flash(
+                "{count} dag runs and {altered_ti_count} task instances were canceled".format(
+                    count=dagrun_count, altered_ti_count=task_instance_count))
+
+        self.update_redirect()
+        return redirect(self.get_redirect())
 
 
 class LogModelView(AirflowModelView):
@@ -2774,13 +2939,54 @@ class TaskInstanceModelView(AirflowModelView):
             for dag, tis in dag_to_tis.items():
                 models.clear_task_instances(tis, session=session, dag=dag)
 
+            for ti in tis:
+                _add_log_event_to_session(
+                    session, 'ti_list_clear', ti.execution_date, task_instance=ti
+                )
+                session.merge(ti)
             session.commit()
+
             flash("{0} task instances have been cleared".format(len(tis)))
+
+        except Exception as e:
+            flash('Failed to clear task instances: {}'.format(e), 'error')
+
+        finally:
             self.update_redirect()
             return redirect(self.get_redirect())
 
-        except Exception:
-            flash('Failed to clear task instances', 'error')
+    @provide_session
+    @action('cancel', lazy_gettext('Cancel'),
+            lazy_gettext('Are you sure you want to cancel the state of the selected task'
+                         ' instance(s)?'),
+            single=False)
+    def action_cancel(self, tis, session=None):
+        try:
+            dag_to_tis = {}
+
+            for ti in tis:
+                dag = dagbag.get_dag(ti.dag_id)
+                tis = dag_to_tis.setdefault(dag, [])
+                tis.append(ti)
+
+            for dag, tis in dag_to_tis.items():
+                models.cancel_task_instances(tis, session, dag=dag)
+
+            for ti in tis:
+                _add_log_event_to_session(
+                    session, 'ti_list_cancel', ti.execution_date, task_instance=ti
+                )
+                session.merge(ti)
+            session.commit()
+
+            flash("{0} task instances have been cancelled".format(len(tis)))
+
+        except Exception as e:
+            flash('Failed to clear task instances: {}'.format(e), 'error')
+
+        finally:
+            self.update_redirect()
+            return redirect(self.get_redirect())
 
     @provide_session
     def set_task_instance_state(self, tis, target_state, session=None):
@@ -2788,11 +2994,15 @@ class TaskInstanceModelView(AirflowModelView):
             count = len(tis)
             for ti in tis:
                 ti.set_state(target_state, session=session)
+                _add_log_event_to_session(session,
+                                          'ti_list_set_{}'.format(target_state),
+                                          ti.execution_date,
+                                          task_instance=ti)
             session.commit()
             flash("{count} task instances were set to '{target_state}'".format(
                 count=count, target_state=target_state))
-        except Exception:
-            flash('Failed to set state', 'error')
+        except Exception as e:
+            flash('Failed to set state: {}'.format(e), 'error')
 
     @action('set_running', "Set state to 'running'", '', single=False)
     @has_dag_access(can_dag_edit=True)
