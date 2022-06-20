@@ -37,7 +37,7 @@ from airflow.models.sensorinstance import SensorInstance
 from airflow.models.skipmixin import SkipMixin
 from airflow.models.slamiss import SlaMiss
 from airflow.models.taskfail import TaskFail
-from airflow.models.taskinstance import TaskInstance, clear_task_instances
+from airflow.models.taskinstance import TaskInstance, cancel_task_instances, clear_task_instances
 from airflow.models.taskreschedule import TaskReschedule
 from airflow.models.trigger import Trigger
 from airflow.models.variable import Variable
@@ -73,5 +73,6 @@ __all__ = [
     "Trigger",
     "Variable",
     "XCom",
+    "cancel_task_instances",
     "clear_task_instances",
 ]
