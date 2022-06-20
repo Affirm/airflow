@@ -327,6 +327,7 @@ class DagRun(Base, LoggingMixin):
         session: Session = NEW_SESSION,
         execution_start_date: Optional[datetime] = None,
         execution_end_date: Optional[datetime] = None,
+        execution_date_gte: Optional[datetime] = None,
     ) -> List["DagRun"]:
         """
         Returns a set of dag runs for the given search criteria.

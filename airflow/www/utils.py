@@ -22,8 +22,9 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlencode
 
 import markdown
+import pendulum
 import sqlalchemy as sqla
-from flask import Response, request, url_for
+from flask import Response, request, url_for, g
 from flask.helpers import flash
 from flask_appbuilder.forms import FieldConverter
 from flask_appbuilder.models.filters import BaseFilter
@@ -39,11 +40,12 @@ from sqlalchemy.ext.associationproxy import AssociationProxy
 from sqlalchemy.orm import Session
 
 from airflow import models
-from airflow.models import errors
+from airflow.models import errors, Log
 from airflow.models.dagrun import DagRun
 from airflow.models.taskinstance import TaskInstance
 from airflow.utils import timezone
 from airflow.utils.code_utils import get_python_source
+from airflow.utils.db import create_session
 from airflow.utils.helpers import alchemy_to_dict
 from airflow.utils.json import AirflowJsonEncoder
 from airflow.utils.state import State, TaskInstanceState
@@ -772,3 +774,30 @@ class UIAlert:
             if not user_roles.intersection(set(self.roles)):
                 return False
         return True
+
+
+def log_request(f_name, *args, **kwargs):
+    """
+    helper function to actually create the log object and commit it
+    """
+    with create_session() as session:
+        if g.user.is_anonymous:
+            user = 'anonymous'
+        else:
+            user = g.user.username
+
+        log = Log(
+            event=f_name,
+            task_instance=None,
+            owner=user,
+            extra=str(list(request.values.items())),
+            task_id=request.values.get('task_id'),
+            dag_id=request.values.get('dag_id'))
+
+        if 'execution_date' in kwargs and kwargs['execution_date']:
+            log.execution_date = kwargs['execution_date']
+        if 'execution_date' in request.values:
+            log.execution_date = pendulum.parse(
+                request.values.get('execution_date'))
+
+        session.add(log)

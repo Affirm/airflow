@@ -1859,6 +1859,19 @@ class Airflow(AirflowBaseView):
         # Upon success return to origin.
         return redirect(origin)
 
+
+    @expose('/dags/<string:dag_id>/dag_runs', methods=['POST'])
+    @auth.has_access(
+        [
+            (permissions.ACTION_CAN_EDIT, permissions.RESOURCE_DAG),
+            (permissions.ACTION_CAN_CREATE, permissions.RESOURCE_DAG_RUN),
+        ]
+    )
+    @action_logging
+    @provide_session
+    def trigger_dag(self, dag_id, session=None):
+        redirect_or_json('')
+
     @expose('/trigger', methods=['POST', 'GET'])
     @auth.has_access(
         [
@@ -1969,6 +1982,8 @@ class Airflow(AirflowBaseView):
 
         if unpause and dag.is_paused:
             models.DagModel.get_dagmodel(dag_id).set_is_paused(is_paused=False)
+
+        wwwutils.log_request('trigger', execution_date=execution_date)
 
         try:
             dag.create_dagrun(
