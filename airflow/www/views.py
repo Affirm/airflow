@@ -1970,8 +1970,6 @@ class Airflow(AirflowBaseView):
         if unpause and dag.is_paused:
             models.DagModel.get_dagmodel(dag_id).set_is_paused(is_paused=False)
 
-        wwwutils.log_request('trigger', execution_date=execution_date)
-
         try:
             dag.create_dagrun(
                 run_type=DagRunType.MANUAL,

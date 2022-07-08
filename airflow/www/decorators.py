@@ -29,7 +29,6 @@ from pendulum.parsing.exceptions import ParserError
 
 from airflow.models import Log
 from airflow.utils.session import create_session
-from airflow.www import utils as wwwutils
 
 T = TypeVar("T", bound=Callable)
 
@@ -43,7 +42,40 @@ def action_logging(f: T) -> T:
     def wrapper(*args, **kwargs):
         __tracebackhide__ = True  # Hide from pytest traceback.
 
-        wwwutils.log_request(f.__name__, *args, **kwargs)
+        with create_session() as session:
+            if g.user.is_anonymous:
+                user = 'anonymous'
+            else:
+                user = g.user.username
+
+            fields_skip_logging = {'csrf_token', '_csrf_token'}
+            extra_fields = [
+                (k, v)
+                for k, v in chain(request.values.items(multi=True), request.view_args.items())
+                if k not in fields_skip_logging
+            ]
+
+            params = {k: v for k, v in chain(request.values.items(), request.view_args.items())}
+
+            log = Log(
+                event=f.__name__,
+                task_instance=None,
+                owner=user,
+                extra=str(extra_fields),
+                task_id=params.get('task_id'),
+                dag_id=params.get('dag_id'),
+            )
+
+            if 'execution_date' in request.values:
+                execution_date_value = request.values.get('execution_date')
+                try:
+                    log.execution_date = pendulum.parse(execution_date_value, strict=False)
+                except ParserError:
+                    logger.exception(
+                        "Failed to parse execution_date from the request: %s", execution_date_value
+                    )
+
+            session.add(log)
 
         return f(*args, **kwargs)
 
