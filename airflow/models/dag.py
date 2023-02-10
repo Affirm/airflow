@@ -3320,6 +3320,7 @@ class DagModel(Base):
         )
         session.commit()
 
+        from airflow.models.dagbag import DagBag
         dag = DagBag().get_dag(self.dag_id)
         toggle_state_str = 'OFF' if is_paused else 'ON'
         to_email_address = dag.default_args.get('email', None)
