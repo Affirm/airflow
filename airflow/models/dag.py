@@ -3794,6 +3794,10 @@ class DagModel(Base):
         )
         session.commit()
 
+        toggle_dag_hook = airflow_conf.getimport("affirm", "toggle_dag_hook", fallback=None)
+        if toggle_dag_hook:
+            toggle_dag_hook(self.dag_id, is_paused)
+
     @hybrid_property
     def dag_display_name(self) -> str:
         return self._dag_display_property_value or self.dag_id
