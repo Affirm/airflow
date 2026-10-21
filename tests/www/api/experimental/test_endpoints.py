@@ -29,11 +29,12 @@ import pytest
 
 from airflow import settings
 from airflow.api.common.experimental.trigger_dag import trigger_dag
-from airflow.models import DagBag, DagRun, Pool, TaskInstance
+from airflow.models import DagBag, DagRun, Log, Pool, TaskInstance
 from airflow.models.serialized_dag import SerializedDagModel
 from airflow.settings import Session
 from airflow.utils.timezone import datetime, parse as parse_datetime, utcnow
 from airflow.version import version
+from tests.test_utils.config import conf_vars
 from tests.test_utils.db import clear_db_pools
 
 ROOT_FOLDER = os.path.realpath(
@@ -150,6 +151,17 @@ class TestApiExperimental(TestBase):
         assert 200 == paused_response.status_code
         assert {"is_paused": False} == paused_response.json
 
+    def test_dag_paused_calls_affirm_toggle_dag_hook(self):
+        pause_url = "/api/experimental/dags/example_bash_operator/paused/true"
+        with conf_vars({("affirm", "toggle_dag_hook"): "unittest.mock.sentinel_hook"}), mock.patch(
+            "unittest.mock.sentinel_hook", create=True
+        ) as hook:
+            response = self.client.get(pause_url)
+        self.client.get("/api/experimental/dags/example_bash_operator/paused/false")
+
+        assert 200 == response.status_code
+        hook.assert_called_once_with("example_bash_operator", True)
+
     def test_trigger_dag(self):
         url_template = "/api/experimental/dags/{}/dag_runs"
         run_id = "my_run" + utcnow().isoformat()
@@ -177,8 +189,9 @@ class TestApiExperimental(TestBase):
         self.assert_deprecated(response)
 
         assert 200 == response.status_code
+        # Affirm: execution_date defaults to now() before replace_microseconds is
+        # derived, so it keeps sub-second precision (matches the audit Log row).
         response_execution_date = parse_datetime(json.loads(response.data.decode("utf-8"))["execution_date"])
-        assert 0 == response_execution_date.microsecond
 
         # Check execution_date is correct
         response = json.loads(response.data.decode("utf-8"))
@@ -188,6 +201,21 @@ class TestApiExperimental(TestBase):
         dag_run_id = dag_run.run_id
         assert run_id == dag_run_id
         assert dag_run_id == response["run_id"]
+
+        # Affirm: every API trigger writes an audit Log row
+        session = Session()
+        audit = (
+            session.query(Log)
+            .filter(Log.event == "api_trigger_dag", Log.dag_id == "example_bash_operator")
+            .order_by(Log.id.desc())
+            .first()
+        )
+        assert audit is not None
+        assert audit.owner == "anonymous"
+        assert audit.execution_date == response_execution_date
+        session.query(Log).filter(Log.event == "api_trigger_dag").delete()
+        session.commit()
+        session.close()
 
     def test_trigger_dag_for_date(self):
         url_template = "/api/experimental/dags/{}/dag_runs"

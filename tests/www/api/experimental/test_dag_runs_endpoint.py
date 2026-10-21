@@ -18,6 +18,8 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
+from urllib.parse import quote_plus
 
 import pytest
 
@@ -25,6 +27,7 @@ from airflow.api.common.trigger_dag import trigger_dag
 from airflow.models import DagBag, DagRun
 from airflow.models.serialized_dag import SerializedDagModel
 from airflow.settings import Session
+from airflow.utils import timezone
 
 pytestmark = pytest.mark.db_test
 
@@ -124,3 +127,39 @@ class TestDagRunsEndpoint:
 
         assert isinstance(data, list)
         assert len(data) == 0
+
+    def test_get_dag_runs_filter_by_dagrun_id(self):
+        url_template = "/api/experimental/dags/{}/dag_runs?dagrun_id={}"
+        dag_id = "example_bash_operator"
+        execution_date = timezone.datetime(2024, 1, 1)
+        wanted = trigger_dag(dag_id=dag_id, run_id="wanted_run", execution_date=execution_date)
+        trigger_dag(dag_id=dag_id, run_id="other_run", execution_date=execution_date + timedelta(days=1))
+
+        response = self.app.get(url_template.format(dag_id, "wanted_run"))
+        assert 200 == response.status_code
+        data = json.loads(response.data.decode("utf-8"))
+
+        assert [run["id"] for run in data] == [wanted.id]
+        assert data[0]["run_id"] == "wanted_run"
+
+    def test_get_dag_runs_filter_by_execution_date_gte(self):
+        url_template = "/api/experimental/dags/{}/dag_runs?execution_date_gte={}"
+        dag_id = "example_bash_operator"
+        cutoff = timezone.datetime(2024, 1, 2)
+        trigger_dag(dag_id=dag_id, run_id="before_cutoff", execution_date=cutoff - timedelta(days=1))
+        at_cutoff = trigger_dag(dag_id=dag_id, run_id="at_cutoff", execution_date=cutoff)
+        after_cutoff = trigger_dag(dag_id=dag_id, run_id="after_cutoff", execution_date=cutoff + timedelta(days=1))
+
+        response = self.app.get(url_template.format(dag_id, quote_plus(cutoff.isoformat())))
+        assert 200 == response.status_code
+        data = json.loads(response.data.decode("utf-8"))
+
+        assert sorted(run["id"] for run in data) == sorted([at_cutoff.id, after_cutoff.id])
+
+    def test_get_dag_runs_invalid_execution_date_gte(self):
+        url_template = "/api/experimental/dags/{}/dag_runs?execution_date_gte=not-a-date"
+        dag_id = "example_bash_operator"
+
+        response = self.app.get(url_template.format(dag_id))
+        assert 400 == response.status_code
+        assert "could not be identified as a date" in json.loads(response.data.decode("utf-8"))["error"]
