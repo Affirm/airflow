@@ -413,14 +413,20 @@ class DagRun(Base, LoggingMixin):
         :param execution_date: the execution date
         :param session: database session
         """
-        return (
-            session.query(cls)
-            .filter(
-                cls.dag_id == dag_id,
-                or_(cls.run_id == run_id, cls.execution_date == execution_date),
+        # Affirm: look up run_id and execution_date separately instead of
+        # ``dag_id = ? AND (run_id = ? OR execution_date = ?)``. MySQL cannot
+        # serve that OR from the (dag_id, run_id) / (dag_id, execution_date)
+        # unique indexes and scans every run of the DAG instead (~15s for a DAG
+        # with 2M+ runs, BH-1670); each lookup below is a single unique-index
+        # probe. Airflow 3 drops the execution_date half upstream.
+        dag_run = session.query(cls).filter(cls.dag_id == dag_id, cls.run_id == run_id).one_or_none()
+        if dag_run is None:
+            dag_run = (
+                session.query(cls)
+                .filter(cls.dag_id == dag_id, cls.execution_date == execution_date)
+                .one_or_none()
             )
-            .one_or_none()
-        )
+        return dag_run
 
     @staticmethod
     def generate_run_id(run_type: DagRunType, execution_date: datetime) -> str:
