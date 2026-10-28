@@ -22,7 +22,6 @@ import pendulum
 from connexion import NoContent
 from flask import g
 from marshmallow import ValidationError
-from sqlalchemy import or_
 from sqlalchemy.orm import Query, Session
 
 from airflow.api.common.mark_tasks import (
@@ -297,13 +296,9 @@ def post_dag_run(*, dag_id: str, session: Session = NEW_SESSION) -> APIResponse:
 
     logical_date = pendulum.instance(post_body["execution_date"])
     run_id = post_body["run_id"]
-    dagrun_instance = (
-        session.query(DagRun)
-        .filter(
-            DagRun.dag_id == dag_id,
-            or_(DagRun.run_id == run_id, DagRun.execution_date == logical_date),
-        )
-        .first()
+    # Affirm: reuse find_duplicate's index-friendly lookup (BH-1670).
+    dagrun_instance = DagRun.find_duplicate(
+        dag_id=dag_id, run_id=run_id, execution_date=logical_date, session=session
     )
     if not dagrun_instance:
         try:

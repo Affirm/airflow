@@ -191,6 +191,30 @@ class TestDagRun:
         assert DagRun.find_duplicate(dag_id=dag_id, run_id=None, execution_date=now) is not None
         assert DagRun.find_duplicate(dag_id=dag_id, run_id=None, execution_date=None) is None
 
+    def test_dagrun_find_duplicate_run_id_and_execution_date_match_different_runs(self, session):
+        """A run_id hit on one run and an execution_date hit on another returns the run_id hit (BH-1670)."""
+        now = timezone.utcnow()
+        later = now + datetime.timedelta(minutes=1)
+
+        dag_id = "test_dagrun_find_duplicate_split"
+        for run_id, execution_date in (("run_a", now), ("run_b", later)):
+            session.add(
+                DagRun(
+                    dag_id=dag_id,
+                    run_id=run_id,
+                    run_type=DagRunType.MANUAL,
+                    execution_date=execution_date,
+                    start_date=now,
+                    state=DagRunState.RUNNING,
+                    external_trigger=True,
+                )
+            )
+        session.commit()
+
+        assert DagRun.find_duplicate(dag_id=dag_id, run_id="run_a", execution_date=later).run_id == "run_a"
+        assert DagRun.find_duplicate(dag_id=dag_id, run_id="run_c", execution_date=later).run_id == "run_b"
+        assert DagRun.find_duplicate(dag_id="other_dag", run_id="run_a", execution_date=now) is None
+
     def test_dagrun_success_when_all_skipped(self, session):
         """
         Tests that a DAG run succeeds when all tasks are skipped
