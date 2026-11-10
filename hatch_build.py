@@ -656,7 +656,9 @@ class CustomBuild(BuilderInterface[BuilderConfig, PluginManager]):
             import git
 
             try:
-                repo = git.Repo(str(Path(self.root) / ".git"))
+                # Affirm: open the work tree, not <root>/.git, so this also works in a
+                # git worktree, where .git is a file pointing at the main repo.
+                repo = git.Repo(str(Path(self.root)))
             except git.NoSuchPathError:
                 log.warning(".git directory not found: Cannot compute the git version")
                 return ""
