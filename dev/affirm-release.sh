@@ -121,15 +121,17 @@ ensure_tooling() {
     fi
     # pre-commit is needed by the build: hatch_build.py compiles the www assets with
     # `pre-commit run compile-www-assets`, and .pre-commit-config.yaml needs >= 3.2.
+    # Stay below 4: pre-commit 4 deprecates the `commit`/`push` stage names that
+    # upstream's .pre-commit-config.yaml still uses, and a later release may reject them.
     if ! "${VENV_DIR}/bin/python" - <<'PY' 2>/dev/null
 import hatch, twine
 from importlib.metadata import version
 from packaging.version import Version
-assert Version(version("pre-commit")) >= Version("3.2.0")
+assert Version("3.2.0") <= Version(version("pre-commit")) < Version("4")
 PY
     then
         log "Installing hatch, twine and pre-commit into ${VENV_DIR}"
-        "${VENV_DIR}/bin/python" -m pip install --quiet --upgrade pip hatch twine "pre-commit>=3.2.0"
+        "${VENV_DIR}/bin/python" -m pip install --quiet --upgrade pip hatch twine "pre-commit>=3.2.0,<4"
     fi
     # Put the venv first on PATH so the build's subprocesses use its pre-commit and
     # python3, not whatever pyenv shims are on PATH (the default pyenv python is 3.7).
