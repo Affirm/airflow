@@ -19,6 +19,7 @@ DIST_DIR="${REPO_ROOT}/dist"
 VENV_DIR="${AFFIRM_RELEASE_VENV:-${HOME}/venvs/airflow-release}"
 PYTHON_BIN="${AFFIRM_RELEASE_PYTHON:-}"
 TWINE_REPO="${AFFIRM_RELEASE_REPO:-pypi-local}"
+PYPIRC="${AFFIRM_RELEASE_PYPIRC:-${HOME}/.pypirc}"
 CLEAN=1
 ALLOW_DIRTY=0
 FORCE=0
@@ -46,7 +47,8 @@ Options:
   -n, --dry-run         Do every check but print the upload command instead of running it
   -h, --help            Show this help
 
-Environment overrides: AFFIRM_RELEASE_VENV, AFFIRM_RELEASE_PYTHON, AFFIRM_RELEASE_REPO.
+Environment overrides: AFFIRM_RELEASE_VENV, AFFIRM_RELEASE_PYTHON, AFFIRM_RELEASE_REPO,
+AFFIRM_RELEASE_PYPIRC (default: ~/.pypirc). See dev/AFFIRM_RELEASE.md.
 
 The version comes from __version__ in airflow/__init__.py. Bump it before
 building a new release; Artifactory won't let you overwrite an existing version.
@@ -200,10 +202,34 @@ do_build() {
     ls -lh "${WHEEL}" "${SDIST}"
 }
 
+# Prints the repository URL for $TWINE_REPO from the .pypirc, or nothing if it isn't defined.
+repository_url() {
+    "${VENV_DIR}/bin/python" - "${PYPIRC}" "${TWINE_REPO}" <<'PY'
+import configparser, sys
+cfg = configparser.RawConfigParser()
+cfg.read(sys.argv[1])
+print(cfg.get(sys.argv[2], "repository", fallback=""))
+PY
+}
+
 do_upload() {
     check_artifacts upload
 
-    local cmd=("${TWINE}" upload --repository "${TWINE_REPO}" "${WHEEL}" "${SDIST}")
+    [[ -f "${PYPIRC}" ]] || die "${PYPIRC} not found (see dev/AFFIRM_RELEASE.md for the format)"
+    local url
+    url="$(repository_url)"
+    [[ -n "${url}" ]] || die "No [${TWINE_REPO}] section with a 'repository' URL in ${PYPIRC} (see dev/AFFIRM_RELEASE.md)"
+
+    echo
+    echo "About to publish:"
+    printf '  %-11s %s\n' "package" "apache-airflow ${VERSION}"
+    printf '  %-11s %s\n' "commit" "${HEAD_SHA:0:10} ($(git rev-parse --abbrev-ref HEAD))"
+    printf '  %-11s %s (%s)\n' "files" "$(basename "${WHEEL}")" "$(du -h "${WHEEL}" | cut -f1)"
+    printf '  %-11s %s (%s)\n' "" "$(basename "${SDIST}")" "$(du -h "${SDIST}" | cut -f1)"
+    printf '  %-11s %s -> %s\n' "repository" "${TWINE_REPO}" "${url}"
+    echo
+
+    local cmd=("${TWINE}" upload --config-file "${PYPIRC}" --repository "${TWINE_REPO}" "${WHEEL}" "${SDIST}")
     if [[ ${DRY_RUN} -eq 1 ]]; then
         log "Dry run; would run:"
         printf '  %q' "${cmd[@]}"; echo
@@ -213,13 +239,13 @@ do_upload() {
     if [[ ${ASSUME_YES} -ne 1 ]]; then
         [[ -t 0 ]] || die "Not a terminal; pass --yes to upload non-interactively"
         local answer
-        read -r -p "Upload apache-airflow ${VERSION} (${HEAD_SHA:0:10}) to '${TWINE_REPO}'? [y/N] " answer
+        read -r -p "Proceed? [y/N] " answer
         [[ "${answer}" =~ ^[Yy]$ ]] || die "Aborted"
     fi
 
-    log "Uploading to '${TWINE_REPO}'"
+    log "Uploading to ${url}"
     "${cmd[@]}"
-    log "Uploaded apache-airflow ${VERSION}"
+    log "Uploaded apache-airflow ${VERSION} to ${url}"
 }
 
 ensure_tooling
