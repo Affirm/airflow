@@ -687,6 +687,28 @@ class DagFileProcessor(LoggingMixin):
         if not ti:
             return
 
+        # Affirm patch: a failure callback request is a snapshot of the TI taken when the
+        # scheduler sent it (zombie detection sends it while the TI is RUNNING; the
+        # "killed externally" path sends it while the TI is QUEUED). The TI only leaves that
+        # state once a callback is processed here, so zombie detection can enqueue several
+        # requests for the same attempt, and the task may also have finished on its own in
+        # the meantime. Running handle_failure for a stale request fails the TI a second
+        # time -- e.g. it turns the UP_FOR_RETRY set by the first request into FAILED and
+        # silently consumes the retry. Only act if the TI is still in the state and attempt
+        # the request was created for. Upstream fixed the duplicate-request case in
+        # Airflow 3.4.0 (apache/airflow#68008, closes apache/airflow#42553).
+        if ti.state != simple_ti.state or ti.try_number != simple_ti.try_number:
+            self.log.info(
+                "Skipping stale failure callback for %s: request was created for state=%s "
+                "try_number=%s, but the task instance is now state=%s try_number=%s",
+                ti,
+                simple_ti.state,
+                simple_ti.try_number,
+                ti.state,
+                ti.try_number,
+            )
+            return
+
         task: Operator | None = None
 
         if dagbag and simple_ti.dag_id in dagbag.dags:
