@@ -520,6 +520,90 @@ class TestDagFileProcessor:
             tis = session.query(TaskInstance)
             assert tis[0].hostname == "test_hostname"
 
+    @pytest.mark.parametrize(
+        ["current_state", "current_try_number"],
+        [
+            pytest.param(State.UP_FOR_RETRY, None, id="already_up_for_retry"),
+            pytest.param(State.FAILED, None, id="already_failed"),
+            pytest.param(State.SUCCESS, None, id="already_succeeded"),
+            pytest.param(State.RUNNING, 2, id="next_attempt_running"),
+        ],
+    )
+    @patch.object(TaskInstance, "handle_failure")
+    def test_execute_on_failure_callbacks_skips_stale_request(
+        self, mock_ti_handle_failure, current_state, current_try_number
+    ):
+        """A failure callback created for an attempt the TI has already left must be a no-op."""
+        dagbag = DagBag(dag_folder="/dev/null", include_examples=True, read_dags_from_db=False)
+        dag_file_processor = DagFileProcessor(
+            dag_ids=[], dag_directory=TEST_DAGS_FOLDER, log=mock.MagicMock()
+        )
+        with create_session() as session:
+            session.query(TaskInstance).delete()
+            dag = dagbag.get_dag("example_branch_operator")
+            dagrun = dag.create_dagrun(
+                state=State.RUNNING,
+                execution_date=DEFAULT_DATE,
+                run_type=DagRunType.SCHEDULED,
+                session=session,
+            )
+            task = dag.get_task(task_id="run_this_first")
+            ti = TaskInstance(task, run_id=dagrun.run_id, state=State.RUNNING)
+            ti._try_number = 1
+            session.add(ti)
+
+        # Snapshot taken while the TI was RUNNING attempt 1 (what zombie detection sends).
+        request = TaskCallbackRequest(
+            full_filepath="A", simple_task_instance=SimpleTaskInstance.from_ti(ti), msg="Message"
+        )
+
+        with create_session() as session:
+            ti_db = session.query(TaskInstance).one()
+            ti_db.state = current_state
+            if current_try_number is not None:
+                ti_db._try_number = current_try_number
+
+        with create_session() as session:
+            dag_file_processor.execute_callbacks(dagbag, [request], session)
+        mock_ti_handle_failure.assert_not_called()
+
+    def test_duplicate_zombie_callbacks_do_not_consume_retry(self):
+        """
+        Zombie detection can enqueue the same attempt more than once before the DAG processor
+        handles the first request. The first request moves the TI to UP_FOR_RETRY; the duplicate
+        must not then fail it, which would silently use up the retry.
+        """
+        dagbag = DagBag(dag_folder="/dev/null", include_examples=True, read_dags_from_db=False)
+        dag_file_processor = DagFileProcessor(
+            dag_ids=[], dag_directory=TEST_DAGS_FOLDER, log=mock.MagicMock()
+        )
+        with create_session() as session:
+            session.query(TaskInstance).delete()
+            dag = dagbag.get_dag("example_branch_operator")
+            dagrun = dag.create_dagrun(
+                state=State.RUNNING,
+                execution_date=DEFAULT_DATE,
+                run_type=DagRunType.SCHEDULED,
+                session=session,
+            )
+            task = dag.get_task(task_id="run_this_first")
+            task.retries = 1
+            ti = TaskInstance(task, run_id=dagrun.run_id, state=State.RUNNING)
+            ti._try_number = 1
+            session.add(ti)
+
+        simple_ti = SimpleTaskInstance.from_ti(ti)
+        requests = [
+            TaskCallbackRequest(full_filepath="A", simple_task_instance=simple_ti, msg="zombie #1"),
+            TaskCallbackRequest(full_filepath="A", simple_task_instance=simple_ti, msg="zombie #2"),
+        ]
+        dag_file_processor.execute_callbacks(dagbag, requests)
+
+        with create_session() as session:
+            ti_db = session.query(TaskInstance).one()
+            assert ti_db.state == State.UP_FOR_RETRY
+            assert ti_db.max_tries == 1
+
     def test_process_file_should_failure_callback(self, monkeypatch, tmp_path, get_test_dag):
         callback_file = tmp_path.joinpath("callback.txt")
         callback_file.touch()
